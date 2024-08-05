@@ -6,18 +6,18 @@
   Copyright (c) 2017-2024 Terje Io
   Copyright (c) 2014-2016 Sungeun K. Jeon for Gnea mResearch LLC
 
-  Grbl is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Grbl is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with Grbl.  If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <math.h>
@@ -74,11 +74,11 @@ ISR_CODE void ISR_FUNC(control_interrupt_handler)(control_signals_t signals)
 
         sys.last_event.control.value = signals.value;
 
-        if ((signals.reset || signals.e_stop || signals.motor_fault) && state_get() != STATE_ESTOP)
+        if((signals.reset || signals.e_stop || signals.motor_fault) && state_get() != STATE_ESTOP)
             mc_reset();
         else {
 #ifndef NO_SAFETY_DOOR_SUPPORT
-            if (signals.safety_door_ajar && hal.signals_cap.safety_door_ajar) {
+            if(signals.safety_door_ajar && hal.signals_cap.safety_door_ajar) {
                 if(settings.safety_door.flags.ignore_when_idle) {
                     // Only stop the spindle (laser off) when idle or jogging,
                     // this to allow positioning the controlled point (spindle) when door is open.
@@ -91,27 +91,27 @@ ISR_CODE void ISR_FUNC(control_interrupt_handler)(control_signals_t signals)
                     system_set_exec_state_flag(EXEC_SAFETY_DOOR);
             }
 #endif
-
             if(signals.probe_overtravel) {
                 limit_signals_t overtravel = { .min.z = On};
                 hal.limits.interrupt_callback(overtravel);
                 // TODO: add message?
-            } else if (signals.probe_triggered) {
+            } else if(signals.probe_triggered) {
                 if(sys.probing_state == Probing_Off && (state_get() & (STATE_CYCLE|STATE_JOG))) {
                     system_set_exec_state_flag(EXEC_STOP);
                     sys.alarm_pending = Alarm_ProbeProtect;
                 } else
                     hal.probe.configure(false, false);
-            } else if (signals.probe_disconnected) {
+            } else if(signals.probe_disconnected) {
                 if(sys.probing_state == Probing_Active && state_get() == STATE_CYCLE) {
                     system_set_exec_state_flag(EXEC_FEED_HOLD);
                     sys.alarm_pending = Alarm_ProbeProtect;
                 }
-            } else if (signals.feed_hold)
+            } else if(signals.feed_hold)
                 system_set_exec_state_flag(EXEC_FEED_HOLD);
-            else if (signals.cycle_start) {
+            else if(signals.cycle_start) {
                 system_set_exec_state_flag(EXEC_CYCLE_START);
                 sys.report.cycle_start = settings.status_report.pin_state;
+                gc_state.tool_change = false;
             }
 
             if(signals.block_delete)
@@ -347,7 +347,7 @@ static status_code_t toggle_optional_stop (sys_state_t state, char *args)
 static status_code_t check_mode (sys_state_t state, char *args)
 {
     if (state == STATE_CHECK_MODE) {
-        // Perform reset when toggling off. Check g-code mode should only work if Grbl
+        // Perform reset when toggling off. Check g-code mode should only work if grblHAL
         // is idle and ready, regardless of alarm locks. This is mainly to keep things
         // simple and consistent.
         mc_reset();
@@ -558,12 +558,16 @@ static status_code_t output_ngc_parameters (sys_state_t state, char *args)
     status_code_t retval = Status_OK;
 
     if(args) {
+#if NGC_PARAMETERS_ENABLE
         int32_t id;
         retval = read_int(args, &id);
         if(retval == Status_OK && id >= 0)
             retval = report_ngc_parameter((ngc_param_id_t)id);
         else
             retval = report_named_ngc_parameter(args);
+#else
+        retval = Status_InvalidStatement;
+#endif
     } else
         report_ngc_parameters();
 
@@ -831,7 +835,9 @@ PROGMEM static const sys_command_t sys_commands[] = {
     { "J", jog, {}, { .str = "$J=<gcode> - jog machine" } },
     { "#", output_ngc_parameters, { .allow_blocking = On }, {
         .str = "output offsets, tool table, probing and home position"
+#if NGC_PARAMETERS_ENABLE
      ASCII_EOL "$#=<n> - output value for parameter <n>"
+#endif
     } },
     { "$", output_settings, { .allow_blocking = On }, {
         .str = "$<n> - output setting <n> value"
@@ -986,9 +992,9 @@ void system_command_help (void)
 
 /*! \brief Directs and executes one line of input from protocol_process.
 
-While mostly incoming streaming g-code blocks, this also executes Grbl internal commands, such as
+While mostly incoming streaming g-code blocks, this also executes grblHAL internal commands, such as
 settings, initiating the homing cycle, and toggling switch states. This differs from
-the realtime command module by being susceptible to when Grbl is ready to execute the
+the realtime command module by being susceptible to when grblHAL is ready to execute the
 next line during a cycle, so for switches like block delete, the switch only effects
 the lines that are processed afterward, not necessarily real-time during a cycle,
 since there are motions already stored in the buffer. However, this 'lag' should not
@@ -1104,17 +1110,40 @@ status_code_t system_execute_line (char *line)
     return retval;
 }
 
-// End system commands
+// End system $-commands
+
+/*! \brief Called on homing state changes.
+
+Clears the tool length offset (TLO) when linear axis or X- or Z-axis is homed in lathe mode.
+Typically called on the grbl.on_homing complete event.
+\param id a \a axes_signals_t holding the axis flags that homed status was changed for.
+*/
+void system_clear_tlo_reference (axes_signals_t homing_cycle)
+{
+    plane_t plane;
+
+#if TOOL_LENGTH_OFFSET_AXIS >= 0
+    plane.axis_linear = TOOL_LENGTH_OFFSET_AXIS;
+#else
+    gc_get_plane_data(&plane, gc_state.modal.plane_select);
+#endif
+    if(homing_cycle.mask & (settings.mode == Mode_Lathe ? (X_AXIS_BIT|Z_AXIS_BIT) : bit(plane.axis_linear))) {
+        if(sys.tlo_reference_set.mask != 0) {
+            sys.tlo_reference_set.mask = 0;  // Invalidate tool length offset reference
+            system_add_rt_report(Report_TLOReference);
+        }
+    }
+}
 
 /*! \brief Called on a work coordinate (WCO) changes.
 
 If configured waits for the planner buffer to empty then fires the
 grbl.on_wco_changed event and sets the #Report_WCO flag to add
 the WCO report element to the next status report.
- */
+*/
 void system_flag_wco_change (void)
 {
-    if(!settings.status_report.sync_on_wco_change)
+    if(settings.status_report.sync_on_wco_change)
         protocol_buffer_synchronize();
 
     if(grbl.on_wco_changed)
@@ -1198,12 +1227,26 @@ Fires the \ref grbl.on_rt_reports_added event.
  */
 void system_add_rt_report (report_tracking_t report)
 {
-    if(report == Report_ClearAll)
-        sys.report.value = 0;
-    else if(report == Report_MPGMode)
-        sys.report.mpg_mode = hal.driver_cap.mpg_mode;
-    else
-        sys.report.value |= (uint32_t)report;
+    switch(report) {
+
+        case Report_ClearAll:
+            sys.report.value = 0;
+            return;
+
+        case Report_MPGMode:
+            if(!hal.driver_cap.mpg_mode)
+                return;
+            break;
+
+        case Report_LatheXMode:
+            sys.report.wco = settings.status_report.work_coord_offset;
+            break;
+
+        default:
+            break;
+    }
+
+    sys.report.value |= (uint32_t)report;
 
     if(sys.report.value && grbl.on_rt_reports_added)
         grbl.on_rt_reports_added((report_tracking_flags_t)((uint32_t)report));

@@ -21,7 +21,7 @@
 */
 
 /*
-  This file functions as the primary feedback interface for Grbl. Any outgoing data, such
+  This file functions as the primary feedback interface for grblHAL. Any outgoing data, such
   as the protocol status messages, feedback messages, and status reports, are stored here.
   For the most part, these functions primarily are called from protocol.c methods. If a
   different style feedback is desired (i.e. JSON), then a user can change these following
@@ -38,6 +38,7 @@
 #include "nvs_buffer.h"
 #include "machine_limits.h"
 #include "state_machine.h"
+#include "canbus.h"
 #include "regex.h"
 
 #if ENABLE_SPINDLE_LINEARIZATION
@@ -117,7 +118,7 @@ static char *get_axis_values_inches (float *axis_values)
         if(idx == X_AXIS && gc_state.modal.diameter_mode)
             strcat(buf, ftoa(axis_values[idx] * INCH_PER_MM * 2.0f, N_DECIMAL_COORDVALUE_INCH));
 #if N_AXIS > 3
-        else if(idx > Z_AXIS && bit_istrue(settings.steppers.is_rotational.mask, bit(idx)))
+        else if(idx > Z_AXIS && bit_istrue(settings.steppers.is_rotary.mask, bit(idx)))
             strcat(buf, ftoa(axis_values[idx], N_DECIMAL_COORDVALUE_MM));
 #endif
         else
@@ -266,6 +267,10 @@ void report_message (const char *msg, message_type_t type)
                 hal.stream.write("Warning: ");
                 break;
 
+            case Message_Debug:
+                hal.stream.write("Debug: ");
+                break;
+
             default:
                 break;
         }
@@ -404,7 +409,7 @@ status_code_t report_help (char *args)
 }
 
 
-// Grbl settings print out.
+// grblHAL settings print out.
 
 static int cmp_settings (const void *a, const void *b)
 {
@@ -507,7 +512,7 @@ void report_grbl_settings (bool all, void *data)
 
 // Prints current probe parameters. Upon a probe command, these parameters are updated upon a
 // successful probe or upon a failed probe with the G38.3 without errors command (if supported).
-// These values are retained until Grbl is power-cycled, whereby they will be re-zeroed.
+// These values are retained until grblHAL is power-cycled, whereby they will be re-zeroed.
 void report_probe_parameters (void)
 {
     // Report in terms of machine position.
@@ -542,6 +547,8 @@ void report_tool_offsets (void)
     hal.stream.write("]" ASCII_EOL);
 }
 
+#if NGC_PARAMETERS_ENABLE
+
 // Prints NIST/LinuxCNC NGC parameter value
 status_code_t report_ngc_parameter (ngc_param_id_t id)
 {
@@ -551,7 +558,7 @@ status_code_t report_ngc_parameter (ngc_param_id_t id)
     hal.stream.write(uitoa(id));
     if(ngc_param_get(id, &value)) {
         hal.stream.write("=");
-        hal.stream.write(ftoa(value, 3));
+        hal.stream.write(trim_float(ftoa(value, ngc_float_decimals())));
     } else
         hal.stream.write("=N/A");
     hal.stream.write("]" ASCII_EOL);
@@ -568,7 +575,7 @@ status_code_t report_named_ngc_parameter (char *arg)
     hal.stream.write(arg);
     if(ngc_named_param_get(arg, &value)) {
         hal.stream.write("=");
-        hal.stream.write(ftoa(value, 3));
+        hal.stream.write(trim_float(ftoa(value, ngc_float_decimals())));
     } else
         hal.stream.write("=N/A");
     hal.stream.write("]" ASCII_EOL);
@@ -576,8 +583,9 @@ status_code_t report_named_ngc_parameter (char *arg)
     return Status_OK;
 }
 
+#endif
 
-// Prints Grbl NGC parameters (coordinate offsets, probing, tool table)
+// Prints grblHAL NGC parameters (coordinate offsets, probing, tool table)
 void report_ngc_parameters (void)
 {
     uint_fast8_t idx;
@@ -652,6 +660,9 @@ void report_ngc_parameters (void)
         hal.stream.write(get_axis_value(sys.tlo_reference[plane.axis_linear] / settings.axis[plane.axis_linear].steps_per_mm));
         hal.stream.write("]" ASCII_EOL);
     }
+
+    if(grbl.on_report_ngc_parameters)
+        grbl.on_report_ngc_parameters();
 }
 
 static inline bool is_g92_active (void)
@@ -825,15 +836,16 @@ void report_build_info (char *line, bool extended)
     // Generate compile-time build option list
 
     char *append = &buf[5];
+    spindle_ptrs_t *spindle = spindle_get(0);
 
     strcpy(buf, "[OPT:");
 
-    if(spindle_get_caps(false).variable)
+    if(spindle && spindle->cap.variable)
         *append++ = 'V';
 
     *append++ = 'N';
 
-    if(hal.driver_cap.mist_control)
+    if(hal.coolant_cap.mist)
         *append++ = 'M';
 
 #if COREXY
@@ -854,6 +866,9 @@ void report_build_info (char *line, bool extended)
 
     if(settings.probe.allow_feed_override)
         *append++ = 'A';
+
+    if(spindle && !spindle->cap.direction) // NOTE: Shown when disabled.
+        *append++ = 'D';
 
     if(settings.spindle.flags.enable_rpm_controlled)
         *append++ = '0';
@@ -978,6 +993,9 @@ void report_build_info (char *line, bool extended)
         if(hal.rtc.get_datetime)
             strcat(buf, "RTC,");
 
+        if(canbus_enabled())
+            strcat(buf, "CAN,");
+
     #ifdef PID_LOG
         strcat(buf, "PID,");
     #endif
@@ -1071,8 +1089,8 @@ void report_build_info (char *line, bool extended)
 }
 
 
-// Prints the character string line Grbl has received from the user, which has been pre-parsed,
-// and has been sent into protocol_execute_line() routine to be executed by Grbl.
+// Prints the character string line grblHAL has received from the user, which has been pre-parsed,
+// and has been sent into protocol_execute_line() routine to be executed by grblHAL.
 void report_echo_line_received (char *line)
 {
     hal.stream.write("[echo: ");
@@ -1164,11 +1182,11 @@ void report_realtime_status (void)
 
     uint_fast8_t idx;
     float wco[N_AXIS];
-    if (!settings.status_report.machine_position || report.wco) {
-        for (idx = 0; idx < N_AXIS; idx++) {
+    if(!settings.status_report.machine_position || report.wco) {
+        for(idx = 0; idx < N_AXIS; idx++) {
             // Apply work coordinate offsets and tool length offset to current position.
-            wco[idx] = gc_get_offset(idx);
-            if (!settings.status_report.machine_position)
+            wco[idx] = gc_get_offset(idx, true);
+            if(!settings.status_report.machine_position)
                 print_position[idx] -= wco[idx];
         }
     }
@@ -1226,6 +1244,9 @@ void report_realtime_status (void)
         }
     }
 
+#elif N_SPINDLE > 1
+    if(report.spindle_id)
+        hal.stream.write_all(appendbuf(2, "|S:", uitoa((uint32_t)spindle_0->id)));
 #endif
 
     if(settings.status_report.pin_state) {
@@ -1271,13 +1292,13 @@ void report_realtime_status (void)
     if(settings.status_report.work_coord_offset) {
 
         if(wco_counter > 0 && !report.wco) {
-            if(wco_counter > (REPORT_WCO_REFRESH_IDLE_COUNT - 1) && state_get() == STATE_IDLE)
+            if(wco_counter > (REPORT_WCO_REFRESH_IDLE_COUNT - 1) && state == STATE_IDLE)
                 wco_counter = REPORT_WCO_REFRESH_IDLE_COUNT - 1;
             wco_counter--;
         } else
-            wco_counter = state_get() & (STATE_HOMING|STATE_CYCLE|STATE_HOLD|STATE_JOG|STATE_SAFETY_DOOR)
-                            ? (REPORT_WCO_REFRESH_BUSY_COUNT - 1) // Reset counter for slow refresh
-                            : (REPORT_WCO_REFRESH_IDLE_COUNT - 1);
+            wco_counter = state & (STATE_HOMING|STATE_CYCLE|STATE_HOLD|STATE_JOG|STATE_SAFETY_DOOR)
+                           ? (REPORT_WCO_REFRESH_BUSY_COUNT - 1) // Reset counter for slow refresh
+                           : (REPORT_WCO_REFRESH_IDLE_COUNT - 1);
     } else
         report.wco = Off;
 
@@ -1288,9 +1309,9 @@ void report_realtime_status (void)
         else if((report.overrides = !report.wco)) {
             report.spindle = report.spindle || spindle_0_state.on;
             report.coolant = report.coolant || hal.coolant.get_state().value != 0;
-            override_counter = state_get() & (STATE_HOMING|STATE_CYCLE|STATE_HOLD|STATE_JOG|STATE_SAFETY_DOOR)
-                                 ? (REPORT_OVERRIDE_REFRESH_BUSY_COUNT - 1) // Reset counter for slow refresh
-                                 : (REPORT_OVERRIDE_REFRESH_IDLE_COUNT - 1);
+            override_counter = state & (STATE_HOMING|STATE_CYCLE|STATE_HOLD|STATE_JOG|STATE_SAFETY_DOOR)
+                                ? (REPORT_OVERRIDE_REFRESH_BUSY_COUNT - 1) // Reset counter for slow refresh
+                                : (REPORT_OVERRIDE_REFRESH_IDLE_COUNT - 1);
         }
     } else
         report.overrides = Off;
@@ -1298,8 +1319,14 @@ void report_realtime_status (void)
     if(report.value || gc_state.tool_change) {
 
         if(report.wco) {
-            hal.stream.write_all("|WCO:");
-            hal.stream.write_all(get_axis_values(wco));
+            // If protocol_buffer_synchronize() is running
+            // delay outputting WCO until sync is completed
+            // unless requested from stepper_driver_interrupt_handler.
+            if(report.force_wco || !sys.flags.synchronizing) {
+                hal.stream.write_all("|WCO:");
+                hal.stream.write_all(get_axis_values(wco));
+            } else
+                wco_counter = 0;
         }
 
         if(report.gwco) {
@@ -2446,6 +2473,8 @@ static void report_spindle (spindle_info_t *spindle, void *data)
             *caps++ = 'D';
         if(spindle->hal->cap.laser)
             *caps++ = 'L';
+        if(spindle->hal->cap.laser && spindle->hal->pulse_on)
+            *caps++ = 'A';
         if(spindle->hal->cap.pid)
             *caps++ = 'P';
         if(spindle->hal->cap.pwm_invert)

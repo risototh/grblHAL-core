@@ -5,18 +5,18 @@
 
   Copyright (c) 2020-2024 Terje Io
 
-  Grbl is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Grbl is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with Grbl.  If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 /*! \file
@@ -486,11 +486,11 @@ non-volatile storage until the controller is in IDLE state.
 
 /*! \def TOOLSETTER_RADIUS
 \brief
-The grbl.on_probe_fixture event handler is called by the default tool change algorithm when probing at G59.3.
+The grbl.on_probe_toolsetter event handler is called by the default tool change algorithm when probing at G59.3.
 In addition it will be called on a "normal" probe sequence if the XY position is
 within the radius of the G59.3 position defined below.
 Change if the default value of 5mm is not suitable or set it to 0.0f to disable.
-<br>__NOTE:__ A grbl.on_probe_fixture event handler is not installed by the core, it has to be provided
+<br>__NOTE:__ A grbl.on_probe_toolsetter event handler is not installed by the core, it has to be provided
 by a driver or a plugin.
 */
 #if !defined TOOLSETTER_RADIUS || defined __DOXYGEN__
@@ -513,12 +513,20 @@ Number of tools in tool table, edit to enable (max. 32 allowed)
 
 /*! \def NGC_EXPRESSIONS_ENABLE
 \brief
-Set to \ref On or 1 to enable experimental support for parameters and expressions.
+Set to \ref On or 1 to enable experimental support for expressions.
 
 Some LinuxCNC extensions are supported, conditionals and subroutines are not.
 */
 #if !defined NGC_EXPRESSIONS_ENABLE || defined __DOXYGEN__
 #define NGC_EXPRESSIONS_ENABLE Off
+#endif
+
+/*! \def NGC_PARAMETERS_ENABLE
+\brief
+Set to \ref On or 1 to enable experimental support for parameters.
+*/
+#if !defined NGC_PARAMETERS_ENABLE || defined __DOXYGEN__
+#define NGC_PARAMETERS_ENABLE On
 #endif
 
 /*! \def NGC_N_ASSIGN_PARAMETERS_PER_BLOCK
@@ -686,6 +694,16 @@ The following codes are defined:
 */
 #if !defined DEFAULT_REPORT_RUN_SUBSTATE || defined __DOXYGEN__
 #define DEFAULT_REPORT_RUN_SUBSTATE Off // Default off. Set to \ref On or 1 to enable.
+#endif
+
+/*! \def DEFAULT_REPORT_WHEN_HOMING
+\brief
+Enabling this setting enables status reporting while homing.
+<br>__NOTE:__ Enabling this option may break senders.
+\internal Bit 12 in settings.status_report.
+*/
+#if !defined DEFAULT_REPORT_WHEN_HOMING || defined __DOXYGEN__
+#define DEFAULT_REPORT_WHEN_HOMING Off // Default off. Set to \ref On or 1 to enable.
 #endif
 
 ///@}
@@ -1126,7 +1144,7 @@ Defines the parameters for the first entry in the spindle RPM linearization tabl
 */
 ///@{
 #if !defined DEFAULT_RPM_POINT01 || defined __DOXYGEN__
-#define DEFAULT_RPM_POINT01 DEFAULT_SPINDLE_RPM_MIN  // Don not change! Set DEFAULT_SPINDLE_RPM_MIN instead.
+#define DEFAULT_RPM_POINT01 NAN // DEFAULT_SPINDLE_RPM_MIN  // Replace NAN with DEFAULT_SPINDLE_RPM_MIN to enable.
 #endif
 #if !defined DEFAULT_RPM_LINE_A1 || defined __DOXYGEN__
 #define DEFAULT_RPM_LINE_A1 3.197101e-03f
@@ -1141,7 +1159,7 @@ Defines the parameters for the second entry in the spindle RPM linearization tab
 */
 ///@{
 #if !defined DEFAULT_RPM_POINT12 || defined __DOXYGEN__
-#define DEFAULT_RPM_POINT12 9627.8  // Set to a float constant to enable.
+#define DEFAULT_RPM_POINT12 NAN  // Change NAN to a float constant to enable.
 #endif
 #if !defined DEFAULT_RPM_LINE_A2 || defined __DOXYGEN__
 #define DEFAULT_RPM_LINE_A2  1.722950e-2f
@@ -1156,7 +1174,7 @@ Defines the parameters for the third entry in the spindle RPM linearization tabl
 */
 ///@{
 #if !defined DEFAULT_RPM_POINT23 || defined __DOXYGEN__
-#define DEFAULT_RPM_POINT23 10813.9  // Set to a float constant to enable.
+#define DEFAULT_RPM_POINT23 NAN  // Change NAN to a float constant to enable.
 #endif
 #if !defined DEFAULT_RPM_LINE_A3 || defined __DOXYGEN__
 #define DEFAULT_RPM_LINE_A3 5.901518e-02f
@@ -1171,7 +1189,7 @@ Defines the parameters for the fourth entry in the spindle RPM linearization tab
 */
 ///@{
 #if !defined DEFAULT_RPM_POINT34 || defined __DOXYGEN__
-#define DEFAULT_RPM_POINT34 NAN  // Set to a float constant to enable.
+#define DEFAULT_RPM_POINT34 NAN  // Change NAN to a float constant to enable.
 #endif
 #if !defined DEFAULT_RPM_LINE_A4 || defined __DOXYGEN__
 #define DEFAULT_RPM_LINE_A4  1.203413e-01f
@@ -1326,6 +1344,16 @@ to a reset during motion.
 #endif
 ///@}
 
+/*! /def DEFAULT_HOMING_USE_LIMIT_SWITCHES
+\brief
+Enable this setting to force using limit switches for homing.
+\internal Bit 7 in settings.homing.flags.
+*/
+#if !defined DEFAULT_HOMING_USE_LIMIT_SWITCHES || defined __DOXYGEN__
+#define DEFAULT_HOMING_USE_LIMIT_SWITCHES Off // Default disabled. Set to \ref On or 1 to enable.
+#endif
+///@}
+
 /*! @name $23 - Setting_HomingDirMask
 \ref axismask controlling the direction of movement during homing.
 Unset bits in the mask results in movement in positive direction.
@@ -1453,6 +1481,20 @@ greater.
 #define DEFAULT_HOMING_CYCLE_5 0                        // OPTIONAL: Uncomment and add axes mask to enable
 #endif
 ///@}
+
+/*! @name $671 - Setting_HomePinsInvertMask
+By default, grblHAL sets all input pins to normal-low operation with their internal pull-up resistors
+enabled. This simplifies the wiring for users by requiring only a normally closed (NC) switch connected
+to ground. It is _not_ recommended to use normally-open (NO) switches as this increases the risk
+of electrical noise or cable breaks spuriously triggering the inputs. If normally-open (NO) switches
+are used the logic of the input signals should be be inverted with the \ref axismask below.
+*/
+///@{
+#if !defined DEFAULT_HOME_SIGNALS_INVERT_MASK || defined __DOXYGEN__
+#define DEFAULT_HOME_SIGNALS_INVERT_MASK 0 // Set to -1 or AXES_BITMASK to invert for all axes
+#endif
+///@}
+
 
 // Probing settings (Group_Probing)
 
@@ -1751,6 +1793,18 @@ Timezone offset from UTC in hours, allowed range is -12.0 - 12.0.
 #endif
 ///@}
 
+/*! @name $538 - Setting_RotaryWrap
+Enable fast return to G28 position for rotary axes by \ref axismask.
+Use:
+G91G28<axisletter>0
+G90
+*/
+///@{
+#if !defined DEFAULT_AXIS_ROTARY_WRAP_MASK || defined __DOXYGEN__
+#define DEFAULT_AXIS_ROTARY_WRAP_MASK 0
+#endif
+///@}
+
 // Axis settings (Group_XAxis - Group_VAxis)
 
 /*! @name $10x - Setting_AxisStepsPerMM
@@ -1927,6 +1981,11 @@ __NOTE:__ Must be a positive values.
 #if N_SYS_SPINDLE > 8
 #undef N_SYS_SPINDLE
 #define N_SYS_SPINDLE 8
+#endif
+
+#if NGC_EXPRESSIONS_ENABLE && !NGC_PARAMETERS_ENABLE
+#undef NGC_PARAMETERS_ENABLE
+#define NGC_PARAMETERS_ENABLE On
 #endif
 
 #if (REPORT_WCO_REFRESH_BUSY_COUNT < REPORT_WCO_REFRESH_IDLE_COUNT)

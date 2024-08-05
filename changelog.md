@@ -1,5 +1,500 @@
 ## grblHAL changelog
 
+<a name="20240801">Build 20240801
+
+Core:
+
+* Added option bit for enabling realtime reporting while homing to `$10`, _Status report options_. Ref. [issue #551](https://github.com/grblHAL/core/issues/551).  
+__NOTE:__ Enabling this may affect some senders.
+
+Drivers:
+
+* iMXRT1062, LPC176x, SAM3X8E and STM32F1xx: moved board maps/board specific code to new _boards_ directory. 
+
+* STM32F4xx: fixed regression in SD card code affecting boards using SDIO interface.
+
+---
+
+<a name="20240719">Build 20240719
+
+Core:
+
+* Limited tool change probe moves to be within machine limits. Ref. [issue #542](https://github.com/grblHAL/core/issues/542).
+
+* Added setting `$538` to enable experimental functionality for fast rotary 'rewind' to stored G28 position. Return move should complete in half a rotation or less.  
+To use program:
+```
+G91G28<axisletter>0
+G90
+```
+where \<axisletter\> is the axisletter of the rotary axis to move.
+
+* For developers: added option to redirect debug via driver provided function when `DEBUGOUT` is set to `-1` in _config.h_. Can be used to send debug output to debugger interfaces.
+
+Plugins:
+
+* WebUI: fix for crash when settings page is opened with macros plugin enabled. Ref. [issue #14](https://github.com/grblHAL/Plugin_WebUI/issues/14).
+
+---
+
+<a name="20240709"/>Build 20240709
+
+Core:
+
+* For developers: added printf style debug output function and corresponding macro. See _grbl/stream.h_ for details. Added `grbl.on_report_ngc_parameters` event.
+
+* Fixed silly mistakes in CAN code. Ref. [issue #179](https://github.com/grblHAL/STM32F4xx/issues/179#issuecomment-2217912406).
+
+Drivers:
+
+* SAM3X8E: [PR #25](https://github.com/grblHAL/SAM3X8E/pull/25), adds missing guards around references.
+
+* STM32F1xx: added tentative board map for Creality v4.4.2 and v4.4.7. Ref. [issue #33](https://github.com/grblHAL/STM32F1xx/issues/33). Not tested!
+
+---
+
+<a name="20240704"/>Build 20240704
+
+Core:
+
+* Added high level CANbus API for plugin use. If driver/board combo provides the required lowlevel HAL API the `NEWOPT` string in the `$I` output will contain the `CAN` element when CAN is enabled.  
+Ref. [issue #179](https://github.com/grblHAL/STM32F4xx/issues/179).
+
+* Added soft limits check for corexy kinematics, ref. [discussion #536](https://github.com/grblHAL/core/discussions/536).
+
+Drivers:
+
+* ESP32: fixed WebUI regression. Ref. [issue #116](https://github.com/grblHAL/ESP32/issues/116).
+
+* STM32F7xx, STM32F4xx: added lowlevel CANbus API and enabled it for some boards.
+
+---
+
+
+<a name="20240624"/>Build 20240624
+
+Core:
+
+* Some minor changes to better support keypad macro and networking plugins.
+
+Drivers:
+
+* ESP32: disabled cycle start input for MKS DLC32 board due to incompatible use. Ref. [issue #111](https://github.com/grblHAL/ESP32/issues/111).
+
+* RP2040: fixed incorrect handling of WiFi BSSID.
+
+* STM32F7xx: completed support for WizNet ethernet modules \(W5100S & W5500\). Added code by @dresco for getting unique MAC address, Ref. [discussion #17](https://github.com/grblHAL/STM32F7xx/discussions/17).
+
+Plugins:
+
+* Networking \(WizNet\): fixed incorrect MAC address handling, added weak functions for getting default MAC addresses ++. Ref. [discussion #17](https://github.com/grblHAL/STM32F7xx/discussions/17).
+
+* Keypad macros: added settings for binding single character realtime commands to macro pin event.  
+__NOTE:__ this change will reset _all_ plugin settings to default, backup/restore if this plugin is in use.
+
+---
+
+<a name="20240619"/>Build 20240619
+
+Core:
+
+* Renamed `grbl.on_probe_fixture` event to `grbl.on_probe_toolsetter` and added pointer to toolsetter coordinates as an additional parameter.
+This will allow plugin code to modify the coordinates before moving to the toolsetter so that tools with off center cutting surfaces can be properly measured.
+Ref. [ioSender issue #386](https://github.com/terjeio/ioSender/issues/386).
+
+* Increased backlash parameters precision to 5 decimals. Ref. [issue #452](https://github.com/grblHAL/core/issues/452#issuecomment-2159050856).
+
+* Some bug fixes in NGC parameters and flow control handling.
+
+Drivers:
+
+* ESP32: improved SPI code.
+
+* SAM3X8E: added support for native and MCP3221 I2C ADCs. Ref. [issue #24](https://github.com/grblHAL/SAM3X8E/issues/24).
+
+Plugins:
+
+* Templates: Updated some for core event rename and signature change.
+
+---
+
+<a name="20240604"/>Build 20240604
+
+Core:
+
+* Fixed incorrect implementation of `EXISTS` function. Ref. [issue #527](https://github.com/grblHAL/core/issues/527).
+
+* Added missing clear of parser tool change state when cycle start signal is asserted. Affects tool change mode 'Normal' ($341=0).
+
+---
+
+<a name="20240602"/>Build 20240602
+
+Core:
+
+* Fixed typo/bug in expression precedence handling. Ref. [issue #527](https://github.com/grblHAL/core/issues/527).
+
+Drivers:
+
+* STM32F4xx, STM32F7xx: added cast to suppress compiler warning.
+
+* STM32F7xx: added DMA support for SPI4, fix for SPI SCK pin reporting. WizNet code still not working.
+
+---
+
+<a name="20240527"/>Build 20240527
+
+Core:
+
+* "Hardened" NGC parameter name case swapping, changed to use float precision according to metric/inches setting for parameter reporting. 
+
+---
+
+<a name="20240526"/>Build 20240526
+
+Core:
+
+* Added experimental support for M70-M73, save and restore of modal state.
+
+* Added experimental support of LinuxCNC style subroutines.
+Available for gcode run from local filesystem such as on a SD card or in littlefs.
+
+* Improved handling of G92 when G92 offset is changed while motion is ongoing.
+Position and WCO offset in the realtime report will now be the actual realtime values and not
+the values based on the parser state which may be quite a bit ahead of the machine. Ref. [discussion #241](https://github.com/grblHAL/core/discussions/241#discussioncomment-9463390).
+
+* Fix for [issue #521](https://github.com/grblHAL/core/issues/521), crash when running G65 macro on ESP32.
+
+* "Hardened" stream switching code, likely fix for [discussion #456](https://github.com/grblHAL/core/discussions/456#discussioncomment-9533613).
+
+Drivers:
+
+* STM32F7xx: added initial support for WizNet W5500 and W5100S ethernet modules. Stack starts up but fails later, likely due to SPI issue?.
+To be completed later.
+
+Plugins:
+
+* Keypad, OpenPNP and Encoder: updated for core signature change related to improved G92 handling.
+
+* Networking: fixed incorrect signature of WizNet ethernet init function.
+
+---
+
+<a name="20240513"/>Build 20240513
+
+Core:
+
+* Fix for homing setting regression. Ref. [issue #512](https://github.com/grblHAL/core/issues/512).
+
+Drivers:
+
+* STM32F1xx, STM32F3xx, STM32F4xx: made UART code fully core compliant.
+
+Plugins:
+
+* Networking: fixed ping response when no payload present. Ref. [issue #10](https://github.com/grblHAL/Plugin_networking/issues/10).
+
+---
+
+<a name="20240508"/>Build 20240508
+
+Core:
+
+* Fix for stream regression, improved MPG stream handling. Ref. [issue #509](https://github.com/grblHAL/core/issues/509).
+
+* Added NGC parameter 5599, debug output enabled status.
+
+Drivers:
+
+* ESP32: made UART code fully core compliant, fix for MQTT compilation error.
+
+* STM32F7xx: added missing MPG code, additional I2C port support and made UART code fully core compliant.
+
+---
+
+<a name="20240506"/>Build 20240506
+
+Core:
+
+* Fix for incorrect handling of some flow control statements when nested. Ref. issue [#504](https://github.com/grblHAL/core/issues/504).
+
+* Fixed defaults and added sanity checks for spindle linearization parameters settings.
+
+Drivers:
+
+* ESP32: increased max application size to 2 MB. __NOTE:__ settings and any WebUI files stored in littlefs will be overwritten on an update, backup and restore when updating!
+
+* STM32F1xx: removed stray debug message.
+
+* STM32F4xx: added printf/scanf support to STM32CubeIDE builds with spindle linearization enabled, due to run time issues.  
+Fixed incorrect EEPROM emulator flash section id, ref. core [discussion #503](https://github.com/grblHAL/core/discussions/503) and core [issue #457](https://github.com/grblHAL/core/issues/457).
+
+---
+
+<a name="20240427"/>Build 20240427
+
+Core:
+
+* Added config to enable NGC parameter reporting, default on.
+
+Drivers:
+
+* STM32F1xx: disabled NGC parameter reporting in order free up some flash space \(for 128K variants\).
+
+Plugins:
+
+* SD card (file system macros): added inbuilt `G65P2Q<tool>R<axis>` macro for reading tool offset from tool table. `<tool>` is tool number, `<axis>` is axis number: 0 = X, 1 = Y, ...
+
+* Keypad: allow MPG to take control when estop state is active.
+
+---
+
+<a name="20240425"/>Build 20240425
+
+Core:
+
+* Now reports WCO along with radius/diameter mode changes. Ref. issue [#500](https://github.com/grblHAL/core/issues/500).
+
+Drivers:
+
+* STM32F1xx: fix for broken handling of control signals for RC variant processors. Ref. issue [#51](https://github.com/grblHAL/STM32F1xx/issues/51) and discussion [#499](https://github.com/grblHAL/core/discussions/499).
+
+Plugins:
+
+* SD card (file system macros): added inbuilt `G65P1Q<n>` macro for reading numeric setting value. `<n>` is setting number. Ref. issue [#493](https://github.com/grblHAL/core/issues/493).
+
+---
+
+<a name="20240420"/>Build 20240420
+
+Core:
+
+* Fix for bug/compiler warning. Ref. discussion [#492](https://github.com/grblHAL/core/discussions/492).
+* Fix for broken initialization of wall plotter machine properties.
+
+---
+
+<a name="20240418"/>20240418
+
+Core:
+
+* Fix for compiler warning.
+
+Drivers:
+
+* ESP32: updated Root CNC v3 map and added Root CNC Pro map. Ref. issue [#102](https://github.com/grblHAL/ESP32/discussions/102).  
+Added missing comma. Ref. ioSender issue [#367](https://github.com/terjeio/ioSender/issues/367#issuecomment-2066416027).
+Added tentative support for additional I2C API functions.  
+
+* STM32F4xx: removed stray debug message, fixed I2C strobe and MPG mode input handling. Updated FatFS \(SPI\) to use new task scheduler.
+
+* STM32F7xx: fix for compiler warning.
+
+Plugins:
+
+* Keypad (display): workaround for ESP32 compiler complaining about `static_assert`.
+
+Templates:
+
+* Persistent tool: updated for core change.
+
+---
+
+<a name="20240416"/>Build 20240416
+
+Core:
+
+* Fix for random feed hold/cycle start sequence failures. Ref. issue [#491](https://github.com/grblHAL/core/issues/491).
+
+Drivers:
+
+* STM32F1xx: added tentative support for UART4, not tested!
+
+* STM32F7xx: added support for SPI4, not tested!
+
+* Simulator: added support for continuous 1ms systick event. Ref issue [#8](https://github.com/grblHAL/Simulator/issues/8).
+
+---
+
+<a name="20240408"/>Build 20240408
+
+Core:
+
+* Fix for bug in NGC expressions return statement handling. Ref. issue [#485](https://github.com/grblHAL/core/issues/485).
+
+Drivers:
+
+* RP2040: fix for incorrect handling of safety door input inversion. Ref. issue [#85](https://github.com/grblHAL/RP2040/issues/85).
+
+* STM32F7xx: removed stray project folder from Eclipse debug build configuration.
+
+* All \(remaining\): now calls stepper enable via HAL.
+
+Plugins:
+
+* SD card: fix for potential expression stack issue when macro is terminated early with `M99`.
+
+* Spindle: improved logic, switched polling to new task handling code. Ref. issue [#27](https://github.com/grblHAL/Plugins_spindle/issues/27).
+
+---
+
+<a name="20240404"/>Build 20240404
+
+Core:
+
+* Fixed polar kinematics feed rate handling, some tuning. Ref. issue [#475](https://github.com/grblHAL/core/issues/475).
+
+* Allowed plugins to inject commands when controller is in alarm state. Ref. keypad plugin issue [#11](https://github.com/grblHAL/Plugin_keypad/issues/11).
+
+Drivers:
+
+* STM32F1xx, STM32F3xx, STM32F4xx, STM32F7xx and iMXRT1062: now calls stepper enable via HAL. Ref. spindle issue [#28](https://github.com/grblHAL/Plugins_spindle/issues/28).
+
+Plugins:
+
+* Spindle: improved motor enable support for stepper spindle. Ref. issue [#28](https://github.com/grblHAL/Plugins_spindle/issues/28).
+
+* Plasma: removed stray code causing compilation failure.
+
+---
+
+<a name="20240402"/>Build 20240402
+
+Core:
+
+* Fixed symbol issue with Arduino Due blocking compilation of NGC parameter support.
+
+Drivers:
+
+* SAM3X8E: added driver support for additional aux inputs in order to support probe input.
+
+* iMXRT1062: fixed typo in step inject code causing direction signal to fail for A+ axes.
+
+Plugins:
+
+* Spindle: added motor enable support for stepper spindle.
+
+---
+
+<a name="20240330"/>Build 20240330
+
+Core:
+
+* Added capability flags to HAL for all coolant outputs.
+
+* Hide related settings when no spindle and/or coolant outputs are available. From [PR #479](https://github.com/grblHAL/core/pull/479).
+
+* Fixed typo related to Modbus direction signal. Ref. issue [#478](https://github.com/grblHAL/core/issues/478).
+
+* Fixed typo in handling of aux output port settings. Ref issue [#476](https://github.com/grblHAL/core/issues/476).
+
+Drivers:
+
+* All: updated for coolant capability flags core change.
+
+Plugins:
+
+* Spindle: added packet length to Modbus RX callback. Ref. [issue #26](https://github.com/grblHAL/Plugins_spindle/issues/26).
+
+* Macros: fixed typo causing compilation to fail.
+
+* Trinamic: switched to enum for default driver mode to avoid warnings from TI compiler.
+
+---
+
+<a name="20240328"/>Build 20240328
+
+Core:
+
+* Added missing null spindle handler for ESP32, issue [#473](https://github.com/grblHAL/core/issues/473).
+
+* Fix for unable to set $484 to 0, issue [#466](https://github.com/grblHAL/core/issues/466).
+
+* Added setting $673 for setting coolant on delay after feedhold. Available when safety door handling is not enabled.
+Fixed obscure bug carried over from legacy Grbl related to this. Issue [#467](https://github.com/grblHAL/core/issues/467).
+
+* Enabled setting $394 for spindle on delay after feedhold. Available when safety door handling is not enabled.
+
+Drivers:
+
+* RP2040: fixed regression causing step generation for BTT SKR Pico to partly fail in some configurations. "Hardened" code.
+
+Plugins:
+
+* Motors: fixed bug that left ganged motor drivers in wrong state after leaving the ioSender _Trinamic tuner_ tab.
+
+---
+
+<a name="20240326"/>Build 20240326
+
+Core:
+
+* Fixes for issue [#470](https://github.com/grblHAL/core/issues/470) and [#472](https://github.com/grblHAL/core/issues/472), index overflows.
+
+Drivers:
+
+* iMXRT1062: added support for second UART stream and missing code guard for I2C strobe.
+
+* STM32F4xx and STM32F7xx: improved analog I/O, added check for multiple calls to I2C initialization.
+
+---
+
+<a name="20240318"/>Build 20240318
+
+Core:
+
+* Changed signature of `grbl.on_homing complete` event to include the cycle flags.
+
+* Added definitions for up to four additional digital aux I/O ports.
+
+* Added real time report of selected spindle in multi spindle configurations. Reported on changes only. 
+
+* Removed limits override input invert config, for safety reasons it is always active low.
+
+* Added HAL entry points for second RGB channel, renamed first from `hal.rgb` to `hal.rgb0`.
+
+* Added option to setting `$22` to force use of limit switches for homing when homing inputs are available in the driver/board combo.
+
+* Improved handling of aux I/O pins when claimed for core functions.
+
+* Added flag to `$9` for disabling laser mode capability for primary PWM spindle. Allows leaving laser mode enabled when a
+secondary PWM spindle is available and this is used to control a laser.
+
+* Added some generic setting definitions for stepper drivers, currently used by the motors plugin.
+
+Drivers:
+
+* STM32F4xx: added support for secondary PWM spindle, home signal inputs and preliminary support for the Sienci SLB board. Moved PWM spindle code to separate file.  
+Added full WebUI support for F412 and F429 MCUs, others may work but with settings missing due to limited RAM.  
+Merged some code/adopted ideas from the Sienci SLB project for bitbanged Neopixel support and `$DFU` command for entering DFU bootloader mode \(via USB only for now\).
+
+* STM32F7xx: added support for secondary PWM spindle. Moved PWM spindle code to separate file. Added tentative support for F765 MCU. Some PWM bug fixes.
+
+* ESP32: added 6pack v2 board, fixes for v1 definitions - from [PR #103](https://github.com/grblHAL/ESP32/pull/103). Added driver support for max limit switches and missing init for e-stop input.
+
+* iMXRT1062, STM32F4xx, STM32F7xx and MSP432: updated for core change related to spindle at speed handling.
+
+* RP2040: fix for [issue #83](https://github.com/grblHAL/RP2040/issues/83), missing code guards.
+
+* iMXRT1062, STM32F4xx, RP2040 and ESP32: updated for core change related to the RGB HAL.
+
+Plugins:
+
+* Motors: updated to match improved Trinamic low level driver API. Added optional settings for some tuning parameters and made default symbols overridable.
+Merged some code/adopted ideas from the Sienci SLB project for new functionality.
+Added option for routing StallGuard signals to homing inputs when supported by the driver.  
+__NOTE:__ some of these changes has only been lightly tested.
+
+* Spindle: updated for core changes, switched to shared code for PWM spindle configuration.
+
+* Keypad: limited code guard for enabling keypad plugin to 1 - 3 range to allow other implementations.
+
+* Plasma: corrected messed up settings handling.
+
+* Trinamic drivers: improved configuration handling/inheritance, adapted support for TMC2660 from the Sienci SLB project. Some generic changes to improve consistencty among drivers.
+
+---
+
 <a name="20240228"/>Build 20240228
 
 Core: 

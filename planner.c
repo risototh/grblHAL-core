@@ -397,6 +397,7 @@ bool plan_buffer_line (float *target, plan_line_data_t *pl_data)
     block->condition = pl_data->condition;
     block->overrides = pl_data->overrides;
     block->line_number = pl_data->line_number;
+    block->offset_id = pl_data->offset_id;
     block->output_commands = pl_data->output_commands;
     block->message = pl_data->message;
 
@@ -468,13 +469,13 @@ bool plan_buffer_line (float *target, plan_line_data_t *pl_data)
 
     if(!block->condition.inverse_time &&
         !block->condition.rapid_motion &&
-         (motion.mask & settings.steppers.is_rotational.mask) &&
-          (motion.mask & ~settings.steppers.is_rotational.mask)) {
+         (motion.mask & settings.steppers.is_rotary.mask) &&
+          (motion.mask & ~settings.steppers.is_rotary.mask)) {
 
         float linear_magnitude = 0.0f;
 
         idx = 0;
-        motion.mask &= ~settings.steppers.is_rotational.mask;
+        motion.mask &= ~settings.steppers.is_rotary.mask;
 
         while(motion.mask) {
             if(motion.mask & 0x01)
@@ -503,15 +504,15 @@ bool plan_buffer_line (float *target, plan_line_data_t *pl_data)
     block->millimeters = convert_delta_vector_to_unit_vector(unit_vec);
     block->acceleration = limit_acceleration_by_axis_maximum(unit_vec);
     block->rapid_rate = limit_max_rate_by_axis_maximum(unit_vec);
+#ifdef KINEMATICS_API
+    block->rate_multiplier = pl_data->rate_multiplier;
+#endif
 
     // Store programmed rate.
     if (block->condition.rapid_motion)
         block->programmed_rate = block->rapid_rate;
     else {
         block->programmed_rate = pl_data->feed_rate;
-#ifdef KINEMATICS_API
-        block->rate_multiplier = pl_data->rate_multiplier;
-#endif
         if (block->condition.inverse_time)
             block->programmed_rate *= block->millimeters;
     }
@@ -637,8 +638,8 @@ void plan_cycle_reinitialize (void)
 {
     // Re-plan from a complete stop. Reset planner entry speeds and buffer planned pointer.
     st_update_plan_block_parameters();
-    block_buffer_planned = block_buffer_tail;
-    planner_recalculate();
+    if((block_buffer_planned = block_buffer_tail) != block_buffer_head)
+        planner_recalculate();
 }
 
 // Re-calculates buffered motions profile parameters upon a motion-based override change.
@@ -689,9 +690,10 @@ void plan_feed_override (override_t feed_override, override_t rapid_override)
 void plan_data_init (plan_line_data_t *plan_data)
 {
     memset(plan_data, 0, sizeof(plan_line_data_t));
+    plan_data->offset_id = gc_state.offset_id;
     plan_data->spindle.hal = gc_state.spindle.hal ? gc_state.spindle.hal : spindle_get(0);
     plan_data->condition.target_validated = plan_data->condition.target_valid = sys.soft_limits.mask == 0;
 #ifdef KINEMATICS_API
-    plan_data->rate_multiplier = 1.0;
+    plan_data->rate_multiplier = 1.0f;
 #endif
 }

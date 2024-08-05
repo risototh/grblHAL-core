@@ -105,7 +105,7 @@ typedef union {
 } ijk_words_t;
 
 // Declare gc extern struct
-parser_state_t gc_state, *saved_state = NULL;
+parser_state_t gc_state;
 
 #define FAIL(status) return(status);
 
@@ -186,9 +186,16 @@ axes_signals_t gc_get_g51_state (void)
     return scaled;
 }
 
-float gc_get_offset (uint_fast8_t idx)
+float gc_get_offset (uint_fast8_t idx, bool real_time)
 {
-    return gc_state.modal.coord_system.xyz[idx] + gc_state.g92_coord_offset[idx] + gc_state.tool_length_offset[idx];
+    offset_id_t offset_id;
+
+    if(real_time &&
+        !(settings.status_report.machine_position && settings.status_report.sync_on_wco_change) &&
+          (offset_id = st_get_offset_id()) >= 0)
+        return gc_state.modal.coord_system.xyz[idx] + gc_state.offset_queue[offset_id].values[idx] + gc_state.tool_length_offset[idx];
+    else
+        return gc_state.modal.coord_system.xyz[idx] + gc_state.g92_coord_offset[idx] + gc_state.tool_length_offset[idx];
 }
 
 inline static float gc_get_block_offset (parser_block_t *gc_block, uint_fast8_t idx)
@@ -299,8 +306,12 @@ void gc_init (void)
     if (!settings_read_coord_data(gc_state.modal.coord_system.id, &gc_state.modal.coord_system.xyz))
         grbl.report.status_message(Status_SettingReadFail);
 
-    if (sys.cold_start && !settings.flags.g92_is_volatile && !settings_read_coord_data(CoordinateSystem_G92, &gc_state.g92_coord_offset))
-        grbl.report.status_message(Status_SettingReadFail);
+    if(sys.cold_start && !settings.flags.g92_is_volatile) {
+        if(!settings_read_coord_data(CoordinateSystem_G92, &gc_state.g92_coord_offset))
+            grbl.report.status_message(Status_SettingReadFail);
+        else
+            memcpy(&gc_state.offset_queue[gc_state.offset_id], &gc_state.g92_coord_offset, sizeof(coord_data_t));
+    }
 
     if(grbl.on_wco_changed && (!sys.cold_start ||
                                 !is0_position_vector(gc_state.modal.coord_system.xyz) ||
@@ -309,6 +320,9 @@ void gc_init (void)
 
 #if NGC_EXPRESSIONS_ENABLE
     ngc_flowctrl_init();
+#endif
+#if NGC_PARAMETERS_ENABLE
+    ngc_modal_state_invalidate();
 #endif
 
 //    if(settings.flags.lathe_mode)
@@ -337,9 +351,9 @@ void gc_spindle_off (void)
     system_add_rt_report(Report_Spindle);
 }
 
-void gc_coolant_off (void)
+void gc_coolant (coolant_state_t state)
 {
-    gc_state.modal.coolant.value = 0;
+    gc_state.modal.coolant = state;
     hal.coolant.set_state(gc_state.modal.coolant);
     system_add_rt_report(Report_Coolant);
 }
@@ -347,6 +361,13 @@ void gc_coolant_off (void)
 spindle_ptrs_t *gc_spindle_get (void)
 {
     return gc_state.spindle.hal;
+}
+
+static void add_offset (void)
+{
+    gc_state.offset_id = (gc_state.offset_id + 1) & (MAX_OFFSET_ENTRIES - 1);
+    memcpy(&gc_state.offset_queue[gc_state.offset_id], &gc_state.g92_coord_offset, sizeof(coord_data_t));
+    system_flag_wco_change();
 }
 
 static tool_data_t *tool_get_pending (tool_id_t tool_id)
@@ -454,8 +475,15 @@ static status_code_t read_parameter (char *line, uint_fast8_t *char_counter, flo
             (*char_counter)++;
             char *pos = line = line + *char_counter;
 
-            while(*line && *line != '>')
-                line++;
+            while(*line && *line != '>') {
+                if(*line == ' ') {
+                    char *s1 = line, *s2 = line + 1;
+                    while(*s2)
+                        *s1++ = *s2++;
+                    *(--s2) = '\0';
+                } else
+                    line++;
+            }
 
             *char_counter += line - pos + 1;
 
@@ -467,7 +495,7 @@ static status_code_t read_parameter (char *line, uint_fast8_t *char_counter, flo
             } else
                 status = Status_BadNumberFormat;
 
-        } else if (read_float(line, char_counter, value)) {
+        } else if(read_float(line, char_counter, value)) {
             if(!ngc_param_get((ngc_param_id_t)*value, value))
                 status = Status_BadNumberFormat;
         } else
@@ -481,7 +509,38 @@ static status_code_t read_parameter (char *line, uint_fast8_t *char_counter, flo
     return status;
 }
 
+
 #endif // NGC_EXPRESSIONS_ENABLE
+
+#if NGC_PARAMETERS_ENABLE
+
+bool gc_modal_state_restore (gc_modal_t *copy)
+{
+    bool ok = false;
+
+    if((ok = !!copy && !ABORTED)) {
+
+        copy->auto_restore = false;
+        copy->motion = gc_state.modal.motion;
+
+        if(copy->coolant.value != gc_state.modal.coolant.value) {
+            hal.coolant.set_state(copy->coolant);
+            delay_sec(settings.safety_door.coolant_on_delay, DelayMode_SysSuspend);
+        }
+
+        if(copy->spindle.state.value != gc_state.modal.spindle.state.value || copy->rpm != gc_state.modal.rpm)
+            spindle_restore(gc_state.spindle.hal, copy->spindle.state, copy->rpm);
+
+        memcpy(&gc_state.modal, copy, sizeof(gc_modal_t));
+
+        gc_state.spindle.rpm = gc_state.modal.rpm;
+        gc_state.feed_rate = gc_state.modal.feed_rate;
+    }
+
+    return ok;
+}
+
+#endif // NGC_PARAMETERS_ENABLE
 
 // Remove whitespace, control characters, comments and if block delete is active block delete lines
 // else the block delete character. Remaining characters are converted to upper case.
@@ -561,7 +620,7 @@ char *gc_normalize_block (char *block, char **message)
                                     if(c == '#') {
                                         char_counter--;
                                         if(read_parameter(comment, &char_counter, &value) == Status_OK)
-                                            len += strlen(ftoa(value, 6));
+                                            len += strlen(trim_float(ftoa(value, ngc_float_decimals())));
                                         else
                                             len += 3; // "N/A"
                                     } else
@@ -578,7 +637,7 @@ char *gc_normalize_block (char *block, char **message)
                                         if(c == '#') {
                                             char_counter--;
                                             if(read_parameter(comment, &char_counter, &value) == Status_OK)
-                                                strcat(s3, ftoa(value, 6));
+                                                strcat(s3, trim_float(ftoa(value, ngc_float_decimals())));
                                             else
                                                 strcat(s3, "N/A");
                                             s3 = strchr(s3, '\0');
@@ -756,7 +815,7 @@ status_code_t gc_execute_block (char *block)
 
     // Determine if the line is a program start/end marker.
     // Old comment from protocol.c:
-    // NOTE: This maybe installed to tell Grbl when a program is running vs manual input,
+    // NOTE: This maybe installed to tell grblHAL when a program is running vs manual input,
     // where, during a program, the system auto-cycle start will continue to execute
     // everything until the next '%' sign. This will help fix resuming issues with certain
     // functions that empty the planner buffer to execute its task on-time.
@@ -777,7 +836,7 @@ status_code_t gc_execute_block (char *block)
     memset(&gc_block, 0, sizeof(gc_block));                           // Initialize the parser block struct.
     memcpy(&gc_block.modal, &gc_state.modal, sizeof(gc_state.modal)); // Copy current modes
 
-    bool set_tool = false, spindle_programmed = false;
+    bool set_tool = false, spindle_event = false;
     axis_command_t axis_command = AxisCommand_None;
     io_mcode_t port_command = (io_mcode_t)0;
     plane_t plane;
@@ -1209,12 +1268,13 @@ status_code_t gc_execute_block (char *block)
                         switch(int_value) {
 
                             case 7:
-                                if(!hal.driver_cap.mist_control)
+                                if(!hal.coolant_cap.mist)
                                     FAIL(Status_GcodeUnsupportedCommand);
                                 gc_block.modal.coolant.mist = On;
                                 break;
 
                             case 8:
+                                // TODO: check driver cap?
                                 gc_block.modal.coolant.flood = On;
                                 break;
 
@@ -1227,7 +1287,7 @@ status_code_t gc_execute_block (char *block)
                     case 56:
                         if(!settings.parking.flags.enable_override_control) // TODO: check if enabled?
                             FAIL(Status_GcodeUnsupportedCommand); // [Unsupported M command]
-                        // no break;
+                        // no break
                     case 48: case 49: case 50: case 51: case 53:
                         word_bit.modal_group.M9 = On;
                         gc_block.override_command = (override_mode_t)int_value;
@@ -1262,30 +1322,13 @@ status_code_t gc_execute_block (char *block)
                         word_bit.modal_group.M10 = On;
                         port_command = (io_mcode_t)int_value;
                         break;
-/*
-                    case 70:
-                        if(!saved_state)
-                            saved_state = malloc(sizeof(parser_state_t));
-                        if(!saved_state)
-                            FAIL(Status_GcodeUnsupportedCommand); // [Unsupported M command]
-                        memcpy(saved_state, &gc_state, sizeof(parser_state_t));
-                        return Status_OK;
 
-                    case 71: // Invalidate saved state
-                        if(saved_state) {
-                            free(saved_state);
-                            saved_state = NULL;
-                        }
-                        return Status_OK; // Should fail if no state is saved...
-
-                    case 72:
-                        if(saved_state) {
-                            // TODO: restore state, need to split out execution part of parser to separate functions first?
-                            free(saved_state);
-                            saved_state = NULL;
-                        }
-                        return Status_OK;
-*/
+#if NGC_PARAMETERS_ENABLE
+                    case 70: case 71: case 72: case 73:
+                        //word_bit.modal_group.G0 = On; ??
+                        gc_block.state_action = (modal_state_action_t)int_value;
+                        break;
+#endif
 
                     case 99:
                         word_bit.modal_group.M4 = On;
@@ -1581,7 +1624,7 @@ status_code_t gc_execute_block (char *block)
      To do this, this would simply need to retain all of the data in STEP 1, such as the new block
      data struct, the modal group and value bitflag tracking variables, and axis array indices
      compatible variables. This data contains all of the information necessary to error-check the
-     new g-code block when the EOL character is received. However, this would break Grbl's startup
+     new g-code block when the EOL character is received. However, this would break grblHAL's startup
      lines in how it currently works and would require some refactoring to make it compatible.
   */
 
@@ -1736,7 +1779,7 @@ status_code_t gc_execute_block (char *block)
         gc_state.modal.spindle.rpm_mode = gc_block.modal.spindle.rpm_mode;
     }
 
-    spindle_programmed = gc_block.words.s && !user_words.s;
+    spindle_event = gc_block.words.s && !user_words.s;
 
     if (!gc_block.words.s)
         gc_block.values.s = gc_state.modal.spindle.rpm_mode == SpindleSpeedMode_RPM ? gc_state.spindle.rpm : gc_state.spindle.hal->param->css.max_rpm;
@@ -1936,7 +1979,7 @@ status_code_t gc_execute_block (char *block)
     if (gc_block.modal.units_imperial) do { // Axes indices are consistent, so loop may be used.
         idx--;
 #if N_AXIS > 3
-        if (bit_istrue(axis_words.mask, bit(idx)) && bit_isfalse(settings.steppers.is_rotational.mask, bit(idx))) {
+        if (bit_istrue(axis_words.mask, bit(idx)) && bit_isfalse(settings.steppers.is_rotary.mask, bit(idx))) {
 #else
         if (bit_istrue(axis_words.mask, bit(idx))) {
 #endif
@@ -2049,7 +2092,7 @@ status_code_t gc_execute_block (char *block)
 
     // [13. Cutter radius compensation ]: G41/42 NOT SUPPORTED. Error, if enabled while G53 is active.
     // [G40 Errors]: G2/3 arc is programmed after a G40. The linear move after disabling is less than tool diameter.
-    //   NOTE: Since cutter radius compensation is never enabled, these G40 errors don't apply. Grbl supports G40
+    //   NOTE: Since cutter radius compensation is never enabled, these G40 errors don't apply. grblHAL supports G40
     //   only for the purpose to not error when G40 is sent with a g-code program header to setup the default modes.
 
     // [14. Tool length compensation ]: G43.1 and G49 are always supported, G43 and G43.2 if grbl.tool_table.n_tools > 0
@@ -2347,6 +2390,10 @@ status_code_t gc_execute_block (char *block)
                         FAIL(Status_GcodeValueWordMissing); // [P word missing]
                     if(gc_block.values.p > 65535.0f)
                         FAIL(Status_GcodeValueOutOfRange); // [P word out of range]
+#if NGC_PARAMETERS_ENABLE
+                    if(!ngc_call_push(&gc_state + ngc_call_level()))
+                        FAIL(Status_FlowControlStackOverflow); // [Call level too deep]
+#endif
 #if NGC_EXPRESSIONS_ENABLE
                     // TODO: add context for local storage?
                     {
@@ -2933,6 +2980,7 @@ status_code_t gc_execute_block (char *block)
     // Initialize planner data struct for motion blocks.
     plan_line_data_t plan_data;
     memset(&plan_data, 0, sizeof(plan_line_data_t)); // Zero plan_data struct
+    plan_data.offset_id = gc_state.offset_id;
     plan_data.condition.target_validated = plan_data.condition.target_valid = sys.soft_limits.mask == 0;
 
     // Intercept jog commands and complete error checking for valid jog commands and execute.
@@ -3010,7 +3058,7 @@ status_code_t gc_execute_block (char *block)
         if(gc_block.modal.motion != MotionMode_None && gc_block.modal.motion != MotionMode_Seek) {
             gc_state.spindle.css = &gc_state.spindle.hal->param->css;
             gc_state.spindle.css->axis = plane.axis_1;
-            gc_state.spindle.css->tool_offset = gc_get_offset(gc_state.spindle.css->axis);
+            gc_state.spindle.css->tool_offset = gc_get_offset(gc_state.spindle.css->axis, false);
             float pos = gc_state.position[gc_state.spindle.css->axis] - gc_state.spindle.css->tool_offset;
             gc_block.values.s = pos <= 0.0f ? gc_state.spindle.css->max_rpm : min(gc_state.spindle.css->max_rpm, gc_state.spindle.css->surface_speed / (pos * (float)(2.0f * M_PI)));
 //??            gc_parser_flags.spindle_force_sync = On;
@@ -3160,31 +3208,35 @@ status_code_t gc_execute_block (char *block)
     }
 
     // [7. Spindle control ]:
-    if (gc_state.modal.spindle.state.value != gc_block.modal.spindle.state.value) {
+    if(gc_state.modal.spindle.state.value != gc_block.modal.spindle.state.value) {
         // Update spindle control and apply spindle speed when enabling it in this block.
         // NOTE: All spindle state changes are synced, even in laser mode. Also, plan_data,
         // rather than gc_state, is used to manage laser state for non-laser motions.
+        bool spindle_ok = false;
         if(gc_block.spindle) {
-            if((spindle_programmed = spindle_sync(gc_block.spindle, gc_block.modal.spindle.state, plan_data.spindle.rpm)))
+            if(grbl.on_spindle_programmed)
+                grbl.on_spindle_programmed(gc_block.spindle, gc_block.modal.spindle.state,  plan_data.spindle.rpm, gc_block.modal.spindle.rpm_mode);
+            if((spindle_ok = spindle_sync(gc_block.spindle, gc_block.modal.spindle.state, plan_data.spindle.rpm)))
                 gc_block.spindle->param->state = gc_block.modal.spindle.state;
         } else {
             idx = N_SYS_SPINDLE;
             do {
                 if(spindle_is_enabled(--idx)) {
                     spindle_ptrs_t *spindle = spindle_get(idx);
-                    if(spindle_sync(spindle, gc_block.modal.spindle.state, plan_data.spindle.rpm)) {
-                        spindle_programmed = true;
+                    if(grbl.on_spindle_programmed)
+                        grbl.on_spindle_programmed(spindle, gc_block.modal.spindle.state,  plan_data.spindle.rpm, gc_block.modal.spindle.rpm_mode);
+                    if(spindle_sync(spindle, gc_block.modal.spindle.state, plan_data.spindle.rpm))
                         spindle->param->state = gc_block.modal.spindle.state;
-                    }
+                    else
+                        spindle_ok = false;
                 }
             } while(idx);
         }
-        if(spindle_programmed)
+        if(!(spindle_event = !spindle_ok))
             gc_state.modal.spindle.state = gc_block.modal.spindle.state;
     }
 
-    // TODO: add spindle argument and move into loop above?
-    if(spindle_programmed && grbl.on_spindle_programmed)
+    if(spindle_event && grbl.on_spindle_programmed)
         grbl.on_spindle_programmed(gc_state.spindle.hal, gc_state.modal.spindle.state, gc_state.spindle.rpm, gc_state.modal.spindle.rpm_mode);
 
 // TODO: Recheck spindle running in CCS mode (is_rpm_pos_adjusted == On)?
@@ -3192,6 +3244,33 @@ status_code_t gc_execute_block (char *block)
     plan_data.spindle.state = gc_state.modal.spindle.state; // Set condition flag for planner use.
     plan_data.condition.is_rpm_rate_adjusted = gc_state.is_rpm_rate_adjusted;
     plan_data.condition.is_laser_ppi_mode = gc_state.is_rpm_rate_adjusted && gc_state.is_laser_ppi_mode;
+
+#if NGC_PARAMETERS_ENABLE
+
+    // [7a. Modal state actions ]:
+    switch(gc_block.state_action) {
+
+        case ModalState_Save:
+        case ModalState_SaveAutoRestore:
+            gc_state.modal.rpm = gc_state.spindle.rpm;
+            gc_state.modal.feed_rate = gc_state.feed_rate;
+            if(!ngc_modal_state_save(&gc_state.modal, gc_block.state_action == ModalState_SaveAutoRestore))
+                FAIL(Status_FlowControlOutOfMemory); // [Out of memory] TODO: allocate memory during validation? Static allocation?
+            break;
+
+        case ModalState_Invalidate:
+            ngc_modal_state_invalidate();
+            break;
+
+        case ModalState_Restore:
+            ngc_modal_state_restore();
+            break;
+
+        default:
+            break;
+    }
+
+#endif // NGC_PARAMETERS_ENABLE
 
     // [8. Coolant control ]:
     if (gc_parser_flags.set_coolant && gc_state.modal.coolant.value != gc_block.modal.coolant.value) {
@@ -3329,12 +3408,60 @@ status_code_t gc_execute_block (char *block)
             break;
 
         case NonModal_GoHome_0:
+#if N_AXIS > 3
+            {
+                axes_signals_t wrap = { (axis_words.mask & settings.steppers.is_rotary.mask) & settings.steppers.rotary_wrap.mask };
+                if(gc_state.modal.distance_incremental && wrap.mask) {
+                    for(idx = Z_AXIS + 1; idx < N_AXIS; idx++) {
+                        if(bit_istrue(wrap.mask, bit(idx)) && gc_block.values.xyz[idx] == gc_state.position[idx])
+                            gc_block.rotary_wrap.mask |= bit(idx);
+                    }
+                }
+            }
+            // no break
+#endif
+
         case NonModal_GoHome_1:
             // Move to intermediate position before going home. Obeys current coordinate system and offsets
             // and absolute and incremental modes.
             plan_data.condition.rapid_motion = On; // Set rapid motion condition flag.
-            if (axis_command)
+            if(axis_command)
                 mc_line(gc_block.values.xyz, &plan_data);
+#if N_AXIS > 3
+            if(gc_block.rotary_wrap.mask) {
+
+                coord_system_t wrap_target;
+
+                protocol_buffer_synchronize();
+                memcpy(wrap_target.xyz, gc_block.values.coord_data.xyz, sizeof(coord_system_t));
+
+                for(idx = Z_AXIS + 1; idx < N_AXIS; idx++) {
+                    if(bit_istrue(gc_block.rotary_wrap.mask, bit(idx))) {
+                        float position, delta;
+                        if((wrap_target.xyz[idx] = fmodf(wrap_target.xyz[idx], 360.0f)) < 0.0f)
+                            wrap_target.xyz[idx] = 360.0f + wrap_target.xyz[idx];
+                        if((position = fmodf(gc_state.position[idx], 360.0f)) < 0.0)
+                            position = 360.0f + position;
+                        if((delta = position - wrap_target.xyz[idx]) < -180.0f)
+                            position += 360.0f;
+                        else if(delta > 180.0f)
+                            position -= 360.0f;
+                        sys.position[idx] = lroundf(position * settings.axis[idx].steps_per_mm);
+                    }
+                }
+
+                sync_position();
+                mc_line(wrap_target.xyz, &plan_data);
+                protocol_buffer_synchronize();
+
+                for(idx = Z_AXIS + 1; idx < N_AXIS; idx++) {
+                    if(bit_istrue(gc_block.rotary_wrap.mask, bit(idx)))
+                        sys.position[idx] = lroundf(gc_block.values.coord_data.xyz[idx] * settings.axis[idx].steps_per_mm);
+                }
+
+                sync_position();
+            } else
+#endif
             mc_line(gc_block.values.coord_data.xyz, &plan_data);
             memcpy(gc_state.position, gc_block.values.coord_data.xyz, sizeof(gc_state.position));
             set_scaling(1.0f);
@@ -3350,7 +3477,7 @@ status_code_t gc_execute_block (char *block)
 
         case NonModal_MacroCall:
             {
-#if NGC_EXPRESSIONS_ENABLE
+#if NGC_PARAMETERS_ENABLE
                 ngc_named_param_set("_value", 0.0f);
                 ngc_named_param_set("_value_returned", 0.0f);
 #endif
@@ -3365,7 +3492,7 @@ status_code_t gc_execute_block (char *block)
             memcpy(gc_state.g92_coord_offset, gc_block.values.xyz, sizeof(gc_state.g92_coord_offset));
             if(!settings.flags.g92_is_volatile)
                 settings_write_coord_data(CoordinateSystem_G92, &gc_state.g92_coord_offset); // Save G92 offsets to non-volatile storage
-            system_flag_wco_change();
+            add_offset();
             break;
 
         case NonModal_ResetCoordinateOffset: // G92.1
@@ -3373,19 +3500,19 @@ status_code_t gc_execute_block (char *block)
             clear_vector(gc_state.g92_coord_offset); // Disable G92 offsets by zeroing offset vector.
             if(!settings.flags.g92_is_volatile)
                 settings_write_coord_data(CoordinateSystem_G92, &gc_state.g92_coord_offset); // Save G92 offsets to non-volatile storage
-            system_flag_wco_change();
+            add_offset();
             break;
 
         case NonModal_ClearCoordinateOffset: // G92.2
             gc_state.g92_coord_offset_applied = false;
             clear_vector(gc_state.g92_coord_offset); // Disable G92 offsets by zeroing offset vector.
-            system_flag_wco_change();
+            add_offset();
             break;
 
         case NonModal_RestoreCoordinateOffset: // G92.3
             gc_state.g92_coord_offset_applied = true; // TODO: check for all zero?
             settings_read_coord_data(CoordinateSystem_G92, &gc_state.g92_coord_offset); // Restore G92 offsets from non-volatile storage
-            system_flag_wco_change();
+            add_offset();
             break;
 
         default:
@@ -3527,7 +3654,7 @@ status_code_t gc_execute_block (char *block)
 
         //  Clean out any remaining output commands (may linger on error)
         while(plan_data.output_commands) {
-            output_command_t *next = plan_data.output_commands;
+            output_command_t *next = plan_data.output_commands->next;
             free(plan_data.output_commands);
             plan_data.output_commands = next;
         }
@@ -3641,6 +3768,10 @@ status_code_t gc_execute_block (char *block)
                 free(output_commands);
                 output_commands = next;
             }
+
+#if NGC_PARAMETERS_ENABLE
+            ngc_modal_state_invalidate();
+#endif
 
             grbl.report.feedback_message(Message_ProgramEnd);
         }

@@ -7,18 +7,18 @@
   Copyright (c) 2011-2016 Sungeun K. Jeon for Gnea Research LLC
   Copyright (c) 2009-2011 Simen Svale Skogsrud
 
-  Grbl is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Grbl is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with Grbl.  If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <math.h>
@@ -305,6 +305,10 @@ ISR_CODE void ISR_FUNC(stepper_driver_interrupt_handler)(void)
 
                 if((st.dir_change = st.exec_block == NULL || st.dir_outbits.value != st.exec_segment->exec_block->direction_bits.value))
                     st.dir_outbits = st.exec_segment->exec_block->direction_bits;
+
+                if(st.exec_block != NULL && st.exec_block->offset_id != st.exec_segment->exec_block->offset_id)
+                    sys.report.wco = sys.report.force_wco = On; // Do not generate grbl.on_rt_reports_added event!
+
                 st.exec_block = st.exec_segment->exec_block;
                 st.step_event_count = st.exec_block->step_event_count;
                 st.new_block = true;
@@ -704,9 +708,10 @@ void st_prep_buffer (void)
                 st_prep_block->spindle = pl_block->spindle.hal;
                 st_prep_block->output_commands = pl_block->output_commands;
                 st_prep_block->overrides = pl_block->overrides;
+                st_prep_block->offset_id = pl_block->offset_id;
                 st_prep_block->backlash_motion = pl_block->condition.backlash_motion;
                 st_prep_block->message = pl_block->message;
-                pl_block->message= NULL;
+                pl_block->message = NULL;
 
                 // Initialize segment buffer data for generating the segments.
                 prep.steps_per_mm = st_prep_block->steps_per_mm;
@@ -748,11 +753,11 @@ void st_prep_buffer (void)
                 prep.ramp_type = Ramp_Decel;
                 // Compute decelerate distance relative to end of block.
                 float decel_dist = pl_block->millimeters - inv_2_accel * pl_block->entry_speed_sqr;
-                if (decel_dist < 0.0f) {
+                if(decel_dist < -0.0001f) {
                     // Deceleration through entire planner block. End of feed hold is not in this block.
                     prep.exit_speed = sqrtf(pl_block->entry_speed_sqr - 2.0f * pl_block->acceleration * pl_block->millimeters);
                 } else {
-                    prep.mm_complete = decel_dist; // End of feed hold.
+                    prep.mm_complete = decel_dist < 0.0001f ? 0.0f : decel_dist; // End of feed hold.
                     prep.exit_speed = 0.0f;
                 }
             } else { // [Normal Operation]
@@ -1097,4 +1102,15 @@ float st_get_realtime_rate (void)
             ? prep.current_speed
 #endif
             : 0.0f;
+}
+
+offset_id_t st_get_offset_id (void)
+{
+    plan_block_t *pl_block;
+
+    return st.exec_block
+            ? st.exec_block->offset_id
+            : (sys.holding_state == Hold_Complete && (pl_block = plan_get_current_block())
+                ? pl_block->offset_id
+                : -1);
 }

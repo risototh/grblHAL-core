@@ -74,7 +74,7 @@ static void protocol_exec_rt_suspend (sys_state_t state);
 bool protocol_enqueue_gcode (char *gcode)
 {
     bool ok = xcommand[0] == '\0' &&
-               (state_get() == STATE_IDLE || (state_get() & (STATE_JOG|STATE_TOOL_CHANGE))) &&
+               (state_get() == STATE_IDLE || (state_get() & (STATE_ALARM|STATE_JOG|STATE_TOOL_CHANGE))) &&
                  bit_isfalse(sys.rt_exec_state, EXEC_MOTION_CANCEL);
 
     if(ok && gc_state.file_run)
@@ -375,9 +375,13 @@ bool protocol_main_loop (void)
 bool protocol_buffer_synchronize (void)
 {
     bool ok = true;
+
     // If system is queued, ensure cycle resumes if the auto start flag is present.
     protocol_auto_cycle_start();
+
+    sys.flags.synchronizing = On;
     while ((ok = protocol_execute_realtime()) && (plan_get_current_block() || state_get() == STATE_CYCLE));
+    sys.flags.synchronizing = Off;
 
     return ok;
 }
@@ -584,7 +588,7 @@ bool protocol_exec_rt_system (void)
 
             // Kill spindle and coolant. TODO: Check Mach3 behaviour?
             gc_spindle_off();
-            gc_coolant_off();
+            gc_coolant((coolant_state_t){0});
 
             flush_override_buffers();
             if(!((state_get() == STATE_ALARM) && (sys.alarm == Alarm_LimitsEngaged || sys.alarm == Alarm_HomingRequired))) {
@@ -742,15 +746,13 @@ bool protocol_exec_rt_system (void)
             switch(rt_exec) {
 
                 case CMD_OVERRIDE_COOLANT_MIST_TOGGLE:
-                    if (hal.driver_cap.mist_control && ((state_get() == STATE_IDLE) || (state_get() & (STATE_CYCLE | STATE_HOLD)))) {
+                    if(hal.coolant_cap.mist && ((state_get() == STATE_IDLE) || (state_get() & (STATE_CYCLE | STATE_HOLD))))
                         coolant_state.mist = !coolant_state.mist;
-                    }
                     break;
 
                 case CMD_OVERRIDE_COOLANT_FLOOD_TOGGLE:
-                    if ((state_get() == STATE_IDLE) || (state_get() & (STATE_CYCLE | STATE_HOLD))) {
+                    if(hal.coolant_cap.flood && ((state_get() == STATE_IDLE) || (state_get() & (STATE_CYCLE | STATE_HOLD))))
                         coolant_state.flood = !coolant_state.flood;
-                    }
                     break;
 
                 default:
@@ -764,8 +766,7 @@ bool protocol_exec_rt_system (void)
       // NOTE: Since coolant state always performs a planner sync whenever it changes, the current
       // run state can be determined by checking the parser state.
         if(coolant_state.value != gc_state.modal.coolant.value) {
-            coolant_set_state(coolant_state); // Report flag set in coolant_set_state().
-            gc_state.modal.coolant = coolant_state;
+            gc_coolant(coolant_state); // Report flag set in gc_coolant().
             if(grbl.on_override_changed)
                 grbl.on_override_changed(OverrideChanged_CoolantState);
         }
@@ -942,12 +943,12 @@ ISR_CODE bool ISR_FUNC(protocol_enqueue_realtime_command)(char c)
             break;
 
         case CMD_MPG_MODE_TOGGLE:           // Switch off MPG mode
-            if(hal.stream.type == StreamType_MPG)
+            if((drop = hal.stream.type == StreamType_MPG))
                 protocol_enqueue_foreground_task(stream_mpg_set_mode, NULL);
             break;
 
         case CMD_AUTO_REPORTING_TOGGLE:
-            if(settings.report_interval)
+            if((drop = settings.report_interval != 0))
                 sys.flags.auto_reporting = !sys.flags.auto_reporting;
             break;
 

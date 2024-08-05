@@ -3,22 +3,22 @@
 
   Part of grblHAL
 
-  Copyright (c) 2017-2023 Terje Io
+  Copyright (c) 2017-2024 Terje Io
   Copyright (c) 2011-2016 Sungeun K. Jeon for Gnea Research LLC
   Copyright (c) 2009-2011 Simen Svale Skogsrud
 
-  Grbl is free software: you can redistribute it and/or modify
+  grblHAL is free software: you can redistribute it and/or modify
   it under the terms of the GNU General Public License as published by
   the Free Software Foundation, either version 3 of the License, or
   (at your option) any later version.
 
-  Grbl is distributed in the hope that it will be useful,
+  grblHAL is distributed in the hope that it will be useful,
   but WITHOUT ANY WARRANTY; without even the implied warranty of
-  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
   GNU General Public License for more details.
 
   You should have received a copy of the GNU General Public License
-  along with Grbl.  If not, see <http://www.gnu.org/licenses/>.
+  along with grblHAL. If not, see <http://www.gnu.org/licenses/>.
 */
 
 #ifndef _SETTINGS_H_
@@ -247,7 +247,7 @@ typedef enum {
     Settings_IoPort_OD_Enable = 373,
     Settings_ModBus_BaudRate = 374,
     Settings_ModBus_RXTimeout = 375,
-    Settings_Axis_Rotational = 376,
+    Settings_RotaryAxes = 376,
     Setting_BlueToothInitOK = 377,
     Setting_CoolantOnDelay = 378,
     Setting_CoolantOffDelay = 379,
@@ -318,27 +318,29 @@ typedef enum {
     Setting_Spindle_DirPort = 488,
     Setting_Spindle_PWMPort = 489,
 
-    Setting_Macro0 = 490,
-    Setting_Macro1 = 491,
-    Setting_Macro2 = 492,
-    Setting_Macro3 = 493,
-    Setting_Macro4 = 494,
-    Setting_Macro5 = 495,
-    Setting_Macro6 = 496,
-    Setting_Macro7 = 497,
-    Setting_Macro8 = 498,
-    Setting_Macro9 = 499,
+    Setting_Macro0    = 490,
+    Setting_MacroBase = Setting_Macro0,
+    Setting_Macro1    = 491,
+    Setting_Macro2    = 492,
+    Setting_Macro3    = 493,
+    Setting_Macro4    = 494,
+    Setting_Macro5    = 495,
+    Setting_Macro6    = 496,
+    Setting_Macro7    = 497,
+    Setting_Macro8    = 498,
+    Setting_Macro9    = 499,
 
-    Setting_MacroPort0 = 500,
-    Setting_MacroPort1 = 501,
-    Setting_MacroPort2 = 502,
-    Setting_MacroPort3 = 503,
-    Setting_MacroPort4 = 504,
-    Setting_MacroPort5 = 505,
-    Setting_MacroPort6 = 506,
-    Setting_MacroPort7 = 507,
-    Setting_MacroPort8 = 508,
-    Setting_MacroPort9 = 509,
+    Setting_MacroPort0    = 500,
+    Setting_MacroPortBase = Setting_MacroPort0,
+    Setting_MacroPort1    = 501,
+    Setting_MacroPort2    = 502,
+    Setting_MacroPort3    = 503,
+    Setting_MacroPort4    = 504,
+    Setting_MacroPort5    = 505,
+    Setting_MacroPort6    = 506,
+    Setting_MacroPort7    = 507,
+    Setting_MacroPort8    = 508,
+    Setting_MacroPort9    = 509,
 
     Setting_SpindleEnable0 = 510,
     Setting_SpindleEnable1 = 511,
@@ -368,6 +370,7 @@ typedef enum {
     Setting_NetworkMAC = 535,
     Setting_RGB_StripLengt0 = 536,
     Setting_RGB_StripLengt1 = 537,
+    Setting_RotaryWrap = 538,
 
     Setting_Panel_SpindleSpeed       = 540,  // NOTE: Reserving settings values 540 to 579 for panel settings.
     Setting_Panel_ModbusAddress      = 541,
@@ -391,6 +394,18 @@ typedef enum {
     Setting_Panel_Encoder3_Cpd       = 559,
     Setting_Panel_SettingsMax        = 579,
 
+    Setting_ButtonAction0    = 590,
+    Setting_ButtonActionBase = Setting_ButtonAction0,
+    Setting_ButtonAction1    = 591,
+    Setting_ButtonAction2    = 592,
+    Setting_ButtonAction3    = 593,
+    Setting_ButtonAction4    = 594,
+    Setting_ButtonAction5    = 595,
+    Setting_ButtonAction6    = 596,
+    Setting_ButtonAction7    = 597,
+    Setting_ButtonAction8    = 598,
+    Setting_ButtonAction9    = 599,
+
     Setting_ModbusTCPBase       = 600,    // Reserving settings values 600 to 639 for ModBus TCP (8 sets)
     Setting_ModbusIpAddressBase = Setting_ModbusTCPBase + Setting_ModbusIpAddress,
     Setting_ModbusPortBase      = Setting_ModbusTCPBase + Setting_ModbusPort,
@@ -409,6 +424,33 @@ typedef enum {
     Setting_Kinematics9         = 649,
 
     Setting_FSOptions = 650,
+
+    Setting_Stepper1  = 651,
+    Setting_Stepper2  = 652,
+    Setting_Stepper3  = 653,
+    Setting_Stepper4  = 654,
+    Setting_Stepper5  = 655,
+    Setting_Stepper6  = 656,
+    Setting_Stepper7  = 657,
+    Setting_Stepper8  = 658,
+    Setting_Stepper9  = 659,
+    Setting_Stepper10 = 660,
+    Setting_Stepper11 = 661,
+    Setting_Stepper12 = 662,
+    Setting_Stepper13 = 663,
+    Setting_Stepper14 = 664,
+    Setting_Stepper15 = 665,
+    Setting_Stepper16 = 666,
+    Setting_Stepper17 = 667,
+    Setting_Stepper18 = 668,
+    Setting_Stepper19 = 669,
+    Setting_Stepper20 = 670,
+
+    Setting_HomePinsInvertMask = 671,
+    Setting_Reserved672 = 672,
+    Setting_HoldCoolantOnDelay = 673, // made available if safety door input not provided
+
+    Setting_SpindleInvertMask1 = 716,
 
     Setting_RpmMax1 = 730,
     Setting_RpmMin1 = 731,
@@ -523,7 +565,8 @@ typedef union {
                  parser_state       :1,
                  alarm_substate     :1,
                  run_substate       :1,
-                 unassigned         :4;
+                 when_homing        :1,
+                 unassigned         :3;
     };
 } reportmask_t;
 
@@ -576,9 +619,27 @@ typedef union {
                 manual               :1,
                 override_locks       :1,
                 keep_on_reset        :1,
-                unassigned           :1;
+                use_limit_switches   :1;
     };
 } homing_settings_flags_t;
+
+// Used internally in settings.c only.
+// TODO: replace homing_settings_flags_t with this on a settings struct revision?
+typedef union {
+    uint16_t value;
+    struct {
+        uint16_t enabled              :1,
+                 single_axis_commands :1,
+                 init_lock            :1,
+                 force_set_origin     :1,
+                 two_switches         :1, // is a limits setting
+                 manual               :1,
+                 override_locks       :1,
+                 keep_on_reset        :1,
+                 use_limit_switches   :1,
+                 unused               :7;
+    };
+} homing_flags_t;
 
 typedef struct {
     float fail_length_percent; // DEFAULT_DUAL_AXIS_HOMING_FAIL_AXIS_LENGTH_PERCENT
@@ -605,7 +666,8 @@ typedef struct {
     axes_signals_t enable_invert;
     axes_signals_t deenergize;
 #if N_AXIS > 3
-    axes_signals_t is_rotational; // rotational axes distances are not scaled in imperial mode
+    axes_signals_t is_rotary;   // rotary axes distances are not scaled in imperial mode
+    axes_signals_t rotary_wrap;     // rotary axes that allows G28 wrap for faster move to home position
 #endif
     float pulse_microseconds;
     float pulse_delay_microseconds;
@@ -719,8 +781,9 @@ typedef struct {
     control_signals_t control_invert;
     control_signals_t control_disable_pullup;
     coolant_state_t coolant_invert;
-    uint8_t hole_0;
-    uint16_t hole_1;
+    axes_signals_t home_invert;
+    uint8_t modbus_baud;
+    uint8_t canbus_baud;
     spindle_settings_t spindle;
     stepper_settings_t steppers;
     reportmask_t status_report; // Mask to indicate desired report data.
